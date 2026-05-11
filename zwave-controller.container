@@ -1,0 +1,17 @@
+[Unit]
+Description=Z-Wave keypad to UniFi firewall controller
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/sethdandridge/zwave-controller:latest
+ContainerName=zwave-controller
+EnvironmentFile=/etc/zwave-controller/secrets.env
+AutoUpdate=registry
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

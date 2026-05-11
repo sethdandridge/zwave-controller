@@ -1,0 +1,19 @@
+[project]
+name = "zwave-controller"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "zwave-js-server-python>=0.71.0",
+    "httpx>=0.27",
+    "aiohttp>=3.10",
+]
+
+[project.scripts]
+zwave-controller = "zwave_controller.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zwave_controller"]
