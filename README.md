@@ -1,5 +1,9 @@
 # zwave-controller
 
+> **Warning**: This project was nearly 100% vibecoded. The UniFi API key
+> required to toggle firewall policies is extremely permissive — it grants
+> full network admin access. Use at your own risk.
+
 Bridges a Ring Alarm Keypad (1st Gen, paired via `zwave-js-server`) to a UniFi
 zone-based firewall policy. A correct PIN + **Disarm** pauses the policy; the
 **Arm Away** / **Arm Home** buttons resume it.
