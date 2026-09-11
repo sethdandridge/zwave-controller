@@ -120,11 +120,29 @@ def _normalize_pin(event_data: object) -> str | None:
     return None
 
 
-async def connect_keypad(client: Client, node_id: int) -> Node:
-    """Connect the client, wait for the initial state dump, and return the node."""
+async def connect_keypad(
+    client: Client, node_id: int
+) -> tuple[Node, asyncio.Task[None]]:
+    """Start listening, wait for the initial state dump, return node + task.
+
+    The listen task is handed back rather than fired and forgotten:
+    ``Client.listen()`` swallows ``ConnectionClosed`` and simply returns, so
+    the caller must watch it to notice that zwave-js-server went away.
+    Keeping a reference also stops the task being garbage-collected.
+    """
     driver_ready = asyncio.Event()
-    asyncio.create_task(client.listen(driver_ready))
-    await driver_ready.wait()
+    listen_task = asyncio.create_task(client.listen(driver_ready))
+
+    # Race the handshake against the listener: if the socket drops before the
+    # state dump arrives, waiting on the event alone would hang forever.
+    ready_task = asyncio.create_task(driver_ready.wait())
+    done, _ = await asyncio.wait(
+        {ready_task, listen_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if ready_task not in done:
+        ready_task.cancel()
+        await listen_task  # re-raises the real connection error, if any
+        raise RuntimeError("zwave-js-server closed the connection during startup")
 
     assert client.driver is not None
     try:
@@ -134,4 +152,4 @@ async def connect_keypad(client: Client, node_id: int) -> Node:
 
     label = node.name or node.device_config.description or "unknown"
     _LOGGER.info("keypad node %d: %s (status=%s)", node.node_id, label, node.status)
-    return node
+    return node, listen_task
