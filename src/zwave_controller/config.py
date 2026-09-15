@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -44,6 +45,25 @@ def _int(name: str, default: int, *, minimum: int = 0) -> int:
     return value
 
 
+_MAC_RE = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}")
+
+
+def _mac_set(name: str) -> frozenset[str]:
+    """Comma-separated MACs, normalized to lowercase colon form. Empty is fine."""
+    macs: set[str] = set()
+    for token in os.environ.get(name, "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        mac = token.lower().replace("-", ":")
+        if not _MAC_RE.fullmatch(mac):
+            raise ConfigError(
+                f"{name}: {token!r} is not a MAC address (expected aa:bb:cc:dd:ee:ff)"
+            )
+        macs.add(mac)
+    return frozenset(macs)
+
+
 @dataclass(frozen=True)
 class Config:
     zwave_ws_url: str
@@ -67,9 +87,19 @@ class Config:
     notify_motion: bool
     notify_battery_threshold: int
 
+    # Presence. Door/motion alerts are muted while any of these MACs is on
+    # the WiFi; empty disables the poller entirely.
+    presence_macs: frozenset[str]
+    presence_poll_seconds: int
+    presence_away_grace_seconds: int
+
     @property
     def notifications_enabled(self) -> bool:
         return self.ntfy_url is not None
+
+    @property
+    def presence_enabled(self) -> bool:
+        return bool(self.presence_macs)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -102,4 +132,7 @@ class Config:
             notify_door_cooldown_seconds=_int("NOTIFY_DOOR_COOLDOWN_SECONDS", 15),
             notify_motion=_bool("NOTIFY_MOTION", default=True),
             notify_battery_threshold=battery_threshold,
+            presence_macs=_mac_set("PRESENCE_MACS"),
+            presence_poll_seconds=_int("PRESENCE_POLL_SECONDS", 30, minimum=5),
+            presence_away_grace_seconds=_int("PRESENCE_AWAY_GRACE_SECONDS", 300),
         )

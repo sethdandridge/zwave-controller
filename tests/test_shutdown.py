@@ -55,6 +55,48 @@ async def test_listener_exception_is_a_failure():
     assert excinfo.value.code == 1
 
 
+async def test_extra_task_returning_is_a_failure():
+    """A presence poller that quietly exits would freeze the mute state."""
+    stop = asyncio.Event()
+    listen_task = asyncio.create_task(asyncio.Event().wait())
+
+    async def poller() -> None:
+        return None
+
+    extra = asyncio.create_task(poller(), name="presence")
+    with pytest.raises(SystemExit) as excinfo:
+        await wait_for_shutdown(stop, listen_task, extra)
+    assert excinfo.value.code == 1
+    listen_task.cancel()
+
+
+async def test_extra_task_exception_is_a_failure():
+    stop = asyncio.Event()
+    listen_task = asyncio.create_task(asyncio.Event().wait())
+
+    async def poller() -> None:
+        raise RuntimeError("poller crashed")
+
+    extra = asyncio.create_task(poller(), name="presence")
+    with pytest.raises(SystemExit):
+        await wait_for_shutdown(stop, listen_task, extra)
+    listen_task.cancel()
+
+
+async def test_signal_leaves_extra_task_to_the_caller():
+    stop = asyncio.Event()
+    listen_task = asyncio.create_task(asyncio.Event().wait())
+    extra = asyncio.create_task(asyncio.Event().wait(), name="presence")
+
+    stop.set()
+    await wait_for_shutdown(stop, listen_task, extra)
+
+    await asyncio.sleep(0)
+    assert not extra.done()
+    extra.cancel()
+    listen_task.cancel()
+
+
 async def test_pending_stop_task_is_cancelled():
     """No 'Task was destroyed but it is pending' noise on the failure path."""
     stop = asyncio.Event()

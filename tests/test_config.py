@@ -23,6 +23,9 @@ def clean_env(monkeypatch):
         "NOTIFY_COOLDOWN_SECONDS",
         "NOTIFY_MOTION",
         "NOTIFY_BATTERY_THRESHOLD",
+        "PRESENCE_MACS",
+        "PRESENCE_POLL_SECONDS",
+        "PRESENCE_AWAY_GRACE_SECONDS",
         "UNIFI_SITE",
         "UNIFI_VERIFY_TLS",
         "LOG_LEVEL",
@@ -61,6 +64,25 @@ def test_notification_overrides(monkeypatch):
     assert cfg.notify_battery_threshold == 35
 
 
+def test_presence_disabled_by_default():
+    cfg = Config.from_env()
+    assert cfg.presence_macs == frozenset()
+    assert cfg.presence_enabled is False
+    assert cfg.presence_poll_seconds == 30
+    assert cfg.presence_away_grace_seconds == 300
+
+
+def test_presence_macs_are_normalized(monkeypatch):
+    monkeypatch.setenv("PRESENCE_MACS", "3E:90:21:A9:71:A2, aa-bb-cc-dd-ee-ff,")
+    monkeypatch.setenv("PRESENCE_POLL_SECONDS", "10")
+    monkeypatch.setenv("PRESENCE_AWAY_GRACE_SECONDS", "0")
+    cfg = Config.from_env()
+    assert cfg.presence_macs == frozenset({"3e:90:21:a9:71:a2", "aa:bb:cc:dd:ee:ff"})
+    assert cfg.presence_enabled is True
+    assert cfg.presence_poll_seconds == 10
+    assert cfg.presence_away_grace_seconds == 0
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -68,6 +90,11 @@ def test_notification_overrides(monkeypatch):
         ("NOTIFY_COOLDOWN_SECONDS", "-5"),
         ("NOTIFY_BATTERY_THRESHOLD", "101"),
         ("NOTIFY_MOTION", "maybe"),
+        ("PRESENCE_MACS", "3e:90:21:a9:71"),
+        ("PRESENCE_MACS", "seths-iphone"),
+        ("PRESENCE_MACS", "3e:90:21:a9:71:a2,3e:90:21:a9:71:zz"),
+        ("PRESENCE_POLL_SECONDS", "1"),
+        ("PRESENCE_AWAY_GRACE_SECONDS", "-1"),
     ],
 )
 def test_bad_values_rejected(monkeypatch, name, value):

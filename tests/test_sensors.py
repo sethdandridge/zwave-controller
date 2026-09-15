@@ -32,6 +32,7 @@ async def build(driver, notifier, **kwargs) -> tuple[SensorHandler, FakeClock]:
         door_cooldown_seconds=kwargs.pop("door_cooldown_seconds", 15),
         battery_threshold=kwargs.pop("battery_threshold", 20),
         motion_enabled=kwargs.pop("motion_enabled", True),
+        muted=kwargs.pop("muted", None),
         clock=clock,
     )
     handler.attach()
@@ -456,3 +457,97 @@ def test_node_label_prefers_name_then_description_then_id():
     assert node_label(FakeNode(1, name="Kitchen")) == "Kitchen"
     assert node_label(FakeNode(2, description="Contact Sensor")) == "Contact Sensor"
     assert node_label(FakeNode(3)) == "node 3"
+
+
+# -- presence muting ----------------------------------------------------------
+
+
+def open_door(door):
+    door.emit("notification", {"notification": notification(door, type_=ACCESS_CONTROL, event=DOOR_OPEN)})
+
+
+def trip_motion(motion):
+    motion.emit("notification", {"notification": notification(motion, type_=HOME_SECURITY, event=MOTION)})
+
+
+async def test_door_and_motion_muted_while_home(driver, door, motion):
+    notifier = FakeNotifier()
+    await build(driver, notifier, muted=lambda: True)
+
+    open_door(door)
+    trip_motion(motion)
+    await drain()
+
+    assert notifier.sent == []
+
+
+async def test_health_alerts_not_muted_while_home(driver, door, motion):
+    from .conftest import FakeValue
+
+    notifier = FakeNotifier()
+    await build(driver, notifier, muted=lambda: True)
+
+    motion.emit("notification", {"notification": notification(motion, type_=HOME_SECURITY, event=COVER_REMOVED)})
+    door.emit("value updated", {"value": FakeValue(BATTERY_CC, "isLow", True)})
+    door.emit("dead", {})
+    door.emit("alive", {})
+    await drain()
+
+    assert notifier.titles == [
+        "Tamper: Motion Sensor v2",
+        "Low battery: Front Door",
+        "Front Door offline",
+        "Front Door back online",
+    ]
+
+
+async def test_leaving_unmutes(driver, door):
+    notifier = FakeNotifier()
+    state = {"home": True}
+    await build(driver, notifier, muted=lambda: state["home"])
+
+    open_door(door)
+    await drain()
+    assert notifier.sent == []
+
+    state["home"] = False
+    open_door(door)
+    await drain()
+    assert notifier.titles == ["Front Door opened"]
+
+
+async def test_muted_alert_does_not_start_a_cooldown(driver, door):
+    """A door opened while home must not hide a real open right after leaving."""
+    notifier = FakeNotifier()
+    state = {"home": True}
+    _, clock = await build(driver, notifier, muted=lambda: state["home"], door_cooldown_seconds=15)
+
+    open_door(door)
+    await drain()
+    assert notifier.sent == []
+
+    state["home"] = False
+    clock.advance(1)
+    open_door(door)
+    await drain()
+    assert len(notifier.sent) == 1
+
+
+async def test_muted_door_is_logged_at_info(driver, door, caplog):
+    notifier = FakeNotifier()
+    await build(driver, notifier, muted=lambda: True)
+
+    with caplog.at_level("INFO", logger="zwave_controller.sensors"):
+        open_door(door)
+        await drain()
+
+    assert any("muted door alert" in r.getMessage() for r in caplog.records)
+
+
+async def test_no_presence_source_means_never_muted(driver, door):
+    notifier = FakeNotifier()
+    await build(driver, notifier, muted=None)
+
+    open_door(door)
+    await drain()
+    assert len(notifier.sent) == 1
