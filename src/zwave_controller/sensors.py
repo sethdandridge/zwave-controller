@@ -10,6 +10,10 @@ motion sensor re-fires every few seconds and an unfiltered feed makes the
 phone unusable. Low battery adds edge detection on top: it is re-reported
 on every wake-up, so the cooldown alone would need to be impractically long,
 and it is capped at one push per node per day either way.
+
+Door and motion are additionally muted while ``muted()`` says someone is
+home (see presence.py). Health alerts -- tamper, battery, offline/online --
+are never muted: being home is no reason not to hear about a dead sensor.
 """
 from __future__ import annotations
 
@@ -75,6 +79,9 @@ _CAT_BATTERY = "battery"
 _CAT_OFFLINE = "offline"
 _CAT_ONLINE = "online"
 
+# The only categories presence is allowed to silence.
+_MUTED_WHEN_HOME = frozenset({_CAT_DOOR, _CAT_MOTION})
+
 # A low battery is an edge, but a device whose ``level`` hovers around the
 # threshold while ``isLow`` stays set would re-edge on every wake-up. Cap it
 # at one push per node per day regardless.
@@ -96,6 +103,7 @@ class SensorHandler:
         door_cooldown_seconds: int = 15,
         battery_threshold: int = 20,
         motion_enabled: bool = True,
+        muted: Callable[[], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._driver = driver
@@ -104,6 +112,9 @@ class SensorHandler:
         self._door_cooldown = door_cooldown_seconds
         self._battery_threshold = battery_threshold
         self._motion_enabled = motion_enabled
+        # ``None`` means no presence source is configured; a callable
+        # returning True mutes door/motion for that event.
+        self._muted = muted
         self._clock = clock
         self._loop = asyncio.get_running_loop()
         self._last_alert: dict[tuple[int, str], float] = {}
@@ -129,12 +140,13 @@ class SensorHandler:
             )
         _LOGGER.info(
             "sensor alerts active on %d node(s): door/tamper cooldown=%ds "
-            "motion cooldown=%ds motion=%s battery<%d%%",
+            "motion cooldown=%ds motion=%s battery<%d%% presence mute=%s",
             len(nodes),
             self._door_cooldown,
             self._cooldown,
             self._motion_enabled,
             self._battery_threshold,
+            "on" if self._muted is not None else "off",
         )
 
     # -- event callbacks (synchronous; the emitter is not async) --------
@@ -333,7 +345,25 @@ class SensorHandler:
         return self._cooldown
 
     def _fire(self, node_id: int, category: str, alert: dict[str, str]) -> None:
-        """Send an alert unless this node/category is still cooling down."""
+        """Send an alert unless muted by presence or still cooling down.
+
+        The presence check comes first and does not touch the cooldown: a
+        door opened while home must not start a window that hides a real
+        open seconds after the phone leaves. Door mutes are logged at INFO
+        so the journal still shows when the door opened; motion at DEBUG
+        because it re-fires constantly while someone is around.
+        """
+        if self._muted is not None and category in _MUTED_WHEN_HOME and self._muted():
+            level = logging.INFO if category == _CAT_DOOR else logging.DEBUG
+            _LOGGER.log(
+                level,
+                "muted %s alert for node %d (someone is home): %s",
+                category,
+                node_id,
+                alert["title"],
+            )
+            return
+
         cooldown = self._cooldown_for(category)
         key = (node_id, category)
         now = self._clock()

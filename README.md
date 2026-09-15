@@ -10,7 +10,8 @@ zone-based firewall policy. A correct PIN + **Disarm** pauses the policy; the
 
 Also sends [ntfy](https://ntfy.sh) push notifications for door-open, motion,
 and sensor health events from every other node on the controller — see
-[Notifications](#notifications).
+[Notifications](#notifications). Door and motion pushes can be muted while a
+phone is on the WiFi — see [Presence](#presence).
 
 ## Local development
 
@@ -54,12 +55,12 @@ after a restart.
 
 | Event | Push | Priority |
 |---|---|---|
-| Door/window **opened** | yes | high |
+| Door/window **opened** | yes, unless someone is home ([Presence](#presence)) | high |
 | Door/window **closed** (back to idle) | no (DEBUG log only) | — |
-| Motion detected | yes, unless `NOTIFY_MOTION=false` | default |
-| Tamper — cover removed, product moved | yes | urgent |
-| Battery low (`isLow`, or level ≤ `NOTIFY_BATTERY_THRESHOLD`) | yes | default |
-| Node stopped responding / recovered | yes | high / low |
+| Motion detected | yes, unless `NOTIFY_MOTION=false` or someone is home | default |
+| Tamper — cover removed, product moved | yes, even when home | urgent |
+| Battery low (`isLow`, or level ≤ `NOTIFY_BATTERY_THRESHOLD`) | yes, even when home | default |
+| Node stopped responding / recovered | yes, even when home | high / low |
 
 "Door opened" covers two different spellings, because devices disagree:
 Access Control *Door state* (event 22) and Home Security *Sensor status*
@@ -116,6 +117,51 @@ curl -d "test" -H "Title: hello" https://ntfy.sh/zw-<your-topic>
 Delivery is best-effort: a failed push is logged as a warning and dropped.
 Alerting must never be able to block the firewall toggle.
 
+### Presence
+
+Optional, and off unless `PRESENCE_MACS` is set (it also needs `NTFY_URL`).
+The UniFi client list is polled every `PRESENCE_POLL_SECONDS` (30); while any
+listed MAC is associated with the WiFi, **door and motion** pushes are muted.
+Tamper, battery and offline/online alerts fire regardless — being home is no
+reason not to hear about a dead sensor.
+
+| | |
+|---|---|
+| `PRESENCE_MACS` | comma-separated, e.g. `3e:90:21:a9:71:a2,aa-bb-cc-dd-ee-ff` (case and separator don't matter) |
+| `PRESENCE_POLL_SECONDS` | 30 (minimum 5) |
+| `PRESENCE_AWAY_GRACE_SECONDS` | 300 |
+
+The state machine is deliberately lopsided. One sighting flips to *home*
+immediately, but *away* needs the phone unseen for the whole grace period,
+because an iPhone drops off WiFi for a minute or two whenever it sleeps. A
+failed poll (UniFi unreachable, bad payload) never counts as "nobody home" on
+its own, but it doesn't stop the away timer either: an outage longer than the
+grace period ends with alerts **un**muted, which is the safe direction. The
+first failure logs a warning; the rest of the outage is DEBUG.
+
+Every muted door open is still logged at INFO (`muted door alert for node 5`),
+so `journalctl` remains a record of when the door moved. Muted motion is DEBUG
+only. A muted event does not start a cooldown window, so a door opened one
+second after the phone leaves still pushes.
+
+If the poller task ever dies the service exits non-zero and systemd restarts
+it — a poller frozen at "home" would otherwise mute door alerts forever while
+looking perfectly healthy.
+
+Find the MAC in the UniFi client list rather than in iOS Settings, since the
+two differ when *Private Wi-Fi Address* is on:
+
+```
+curl -sk -H "X-API-KEY: $UNIFI_API_KEY" \
+  https://<unifi-host>/proxy/network/api/s/default/stat/sta \
+  | jq '.data[] | {mac, name, hostname}'
+```
+
+A MAC whose first octet has the `2` bit set (`3e:`, `da:`, …) is a private
+address. iOS keeps it stable per network as long as *Private Wi-Fi Address*
+is set to **Fixed** for that SSID; on **Rotating** (iOS 18+) it changes and
+presence quietly reads "away" from then on. Fail-safe, but useless.
+
 ## Deploying to the Ubuntu VM (Podman Quadlet)
 
 CI (`.github/workflows/build-and-push.yaml`) publishes
@@ -148,6 +194,8 @@ CI (`.github/workflows/build-and-push.yaml`) publishes
 
 - `journalctl` should show `connected to Home ...` and `subscribed to notifications on node 2`.
 - At the keypad, enter `DISARM_PIN` + **Disarm**: logs show `disarm accepted`; the UniFi UI shows the policy now disabled.
+- With `PRESENCE_MACS` set and the phone on WiFi: startup logs `presence: home (3e:90:… on WiFi)`; opening the door produces no push, only an INFO `muted door alert` line; pulling a sensor cover still pushes a tamper alert.
+- Put the phone in airplane mode; within `PRESENCE_AWAY_GRACE_SECONDS` the log shows `presence: away`, and the next door open pushes.
 - Press **Arm Away**: logs show `arm_away accepted`; policy re-enabled.
 - Wrong PIN + **Disarm**: logs show `disarm rejected: bad PIN`; no state change.
 - `sudo podman kill zwave-controller` — systemd restarts the unit within 5 s.
