@@ -25,10 +25,28 @@ class FakeFetch:
         return set(self.macs)
 
 
-def build(fetch: FakeFetch, macs=(PHONE,)) -> tuple[PresenceMonitor, FakeClock]:
+class Greeter:
+    def __init__(self, fail: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self.fail = fail
+
+    async def __call__(self, seen) -> None:
+        self.calls.append(list(seen))
+        if self.fail:
+            raise RuntimeError("ntfy exploded")
+
+
+def build(
+    fetch: FakeFetch, macs=(PHONE,), on_return=None
+) -> tuple[PresenceMonitor, FakeClock]:
     clock = FakeClock()
     monitor = PresenceMonitor(
-        fetch, frozenset(macs), away_grace_seconds=GRACE, poll_seconds=30, clock=clock
+        fetch,
+        frozenset(macs),
+        away_grace_seconds=GRACE,
+        poll_seconds=30,
+        on_return=on_return,
+        clock=clock,
     )
     return monitor, clock
 
@@ -189,3 +207,100 @@ async def test_run_loop_survives_a_failing_poll():
     except asyncio.CancelledError:
         pass
     assert monitor.is_home() is True
+
+
+# -- welcome home -------------------------------------------------------------
+
+
+async def test_startup_while_home_does_not_greet():
+    greeter = Greeter()
+    monitor, _ = build(FakeFetch({PHONE}), on_return=greeter)
+    await monitor.poll_once()
+    assert monitor.is_home() is True
+    assert greeter.calls == []
+
+
+async def test_startup_while_out_then_arriving_greets():
+    greeter = Greeter()
+    fetch = FakeFetch(set())
+    monitor, _ = build(fetch, on_return=greeter)
+    await monitor.poll_once()  # confirmed nobody home
+
+    fetch.macs = {PHONE}
+    await monitor.poll_once()
+    assert greeter.calls == [[PHONE]]
+
+
+async def test_leaving_and_returning_greets_once():
+    greeter = Greeter()
+    fetch = FakeFetch({PHONE})
+    monitor, clock = build(fetch, on_return=greeter)
+    await monitor.poll_once()
+
+    fetch.macs = set()
+    clock.advance(GRACE)
+    await monitor.poll_once()
+    assert monitor.is_home() is False
+
+    fetch.macs = {PHONE}
+    await monitor.poll_once()
+    await monitor.poll_once()
+    assert greeter.calls == [[PHONE]]
+
+
+async def test_brief_wifi_drop_does_not_greet():
+    """Inside the grace period the phone never went 'away', so no greeting."""
+    greeter = Greeter()
+    fetch = FakeFetch({PHONE})
+    monitor, clock = build(fetch, on_return=greeter)
+    await monitor.poll_once()
+
+    fetch.macs = set()
+    clock.advance(60)
+    await monitor.poll_once()
+    fetch.macs = {PHONE}
+    clock.advance(60)
+    await monitor.poll_once()
+    assert greeter.calls == []
+
+
+async def test_startup_poll_failure_then_sighting_does_not_greet():
+    """Unknown -> home is not a return; we never saw you leave."""
+    greeter = Greeter()
+    fetch = FakeFetch({PHONE})
+    monitor, _ = build(fetch, on_return=greeter)
+
+    fetch.fail = True
+    await monitor.poll_once()
+    fetch.fail = False
+    await monitor.poll_once()
+    assert monitor.is_home() is True
+    assert greeter.calls == []
+
+
+async def test_outage_decay_then_return_greets():
+    greeter = Greeter()
+    fetch = FakeFetch({PHONE})
+    monitor, clock = build(fetch, on_return=greeter)
+    await monitor.poll_once()
+
+    fetch.fail = True
+    clock.advance(GRACE)
+    await monitor.poll_once()
+    assert monitor.is_home() is False
+
+    fetch.fail = False
+    await monitor.poll_once()
+    assert greeter.calls == [[PHONE]]
+
+
+async def test_greeter_failure_does_not_break_presence():
+    greeter = Greeter(fail=True)
+    fetch = FakeFetch(set())
+    monitor, _ = build(fetch, on_return=greeter)
+    await monitor.poll_once()
+
+    fetch.macs = {PHONE}
+    await monitor.poll_once()  # must not raise
+    assert monitor.is_home() is True
+    assert len(greeter.calls) == 1

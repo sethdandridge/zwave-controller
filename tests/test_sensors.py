@@ -541,7 +541,38 @@ async def test_muted_door_is_logged_at_info(driver, door, caplog):
         open_door(door)
         await drain()
 
-    assert any("muted door alert" in r.getMessage() for r in caplog.records)
+    assert any(
+        "Front Door opened [muted" in r.getMessage() and r.levelname == "INFO"
+        for r in caplog.records
+    )
+
+
+async def test_cooldown_suppression_is_logged_at_info(driver, motion, caplog):
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    with caplog.at_level("INFO", logger="zwave_controller.sensors"):
+        trip_motion(motion)
+        trip_motion(motion)
+        await drain()
+
+    assert len(notifier.sent) == 1
+    assert any(
+        "Motion: Motion Sensor v2 [suppressed" in r.getMessage() and r.levelname == "INFO"
+        for r in caplog.records
+    )
+
+
+async def test_door_close_is_logged_at_info(driver, door, caplog):
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    with caplog.at_level("INFO", logger="zwave_controller.sensors"):
+        door.emit("notification", {"notification": notification(door, type_=ACCESS_CONTROL, event=DOOR_CLOSED)})
+        await drain()
+
+    assert notifier.sent == []
+    assert any("Front Door closed" in r.getMessage() and r.levelname == "INFO" for r in caplog.records)
 
 
 async def test_no_presence_source_means_never_muted(driver, door):

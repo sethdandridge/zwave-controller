@@ -56,11 +56,20 @@ after a restart.
 | Event | Push | Priority |
 |---|---|---|
 | Door/window **opened** | yes, unless someone is home ([Presence](#presence)) | high |
-| Door/window **closed** (back to idle) | no (DEBUG log only) | — |
+| Door/window **closed** (back to idle) | no (logged) | — |
 | Motion detected | yes, unless `NOTIFY_MOTION=false` or someone is home | default |
 | Tamper — cover removed, product moved | yes, even when home | urgent |
 | Battery low (`isLow`, or level ≤ `NOTIFY_BATTERY_THRESHOLD`) | yes, even when home | default |
 | Node stopped responding / recovered | yes, even when home | high / low |
+| Welcome home — phone back on WiFi after being away ([Presence](#presence)) | yes | low |
+
+**Every event is logged to stdout at INFO whether or not it is pushed.** A
+push that goes out logs `notified: <title>`; one that doesn't logs
+`event: <title> [reason]`, where the reason is `muted, someone is home`,
+`suppressed, 40s into 300s motion cooldown`, `NOTIFY_MOTION off`, or
+`not notifying` for door-closed/idle. The journal is therefore a complete
+record of what the sensors saw, and the phone only hears the interesting
+subset.
 
 "Door opened" covers two different spellings, because devices disagree:
 Access Control *Door state* (event 22) and Home Security *Sensor status*
@@ -139,10 +148,17 @@ its own, but it doesn't stop the away timer either: an outage longer than the
 grace period ends with alerts **un**muted, which is the safe direction. The
 first failure logs a warning; the rest of the outage is DEBUG.
 
-Every muted door open is still logged at INFO (`muted door alert for node 5`),
-so `journalctl` remains a record of when the door moved. Muted motion is DEBUG
-only. A muted event does not start a cooldown window, so a door opened one
-second after the phone leaves still pushes.
+Muted events are still logged (`event: Front Door opened [muted, someone is
+home]`), so `journalctl` remains a record of when the door moved. A muted
+event does not start a cooldown window, so a door opened one second after the
+phone leaves still pushes.
+
+**Welcome home.** When the phone comes back after a confirmed absence you get
+one low-priority push (`Welcome home — 3e:90:… is back on the WiFi`) so you
+know alerts are muted. "Confirmed" means the service actually saw you gone: a
+successful poll without the phone, or the grace period expiring. A restart
+while you are home does not greet you, and a brief WiFi drop inside the grace
+period does not either, because you never counted as away.
 
 If the poller task ever dies the service exits non-zero and systemd restarts
 it — a poller frozen at "home" would otherwise mute door alerts forever while
@@ -196,14 +212,16 @@ CI (`.github/workflows/build-and-push.yaml`) publishes
 - At the keypad, enter `DISARM_PIN` + **Disarm**: logs show `disarm accepted`; the UniFi UI shows the policy now disabled.
 - With `PRESENCE_MACS` set and the phone on WiFi: startup logs `presence: home (3e:90:… on WiFi)`; opening the door produces no push, only an INFO `muted door alert` line; pulling a sensor cover still pushes a tamper alert.
 - Put the phone in airplane mode; within `PRESENCE_AWAY_GRACE_SECONDS` the log shows `presence: away`, and the next door open pushes.
+- Turn WiFi back on: within a poll interval the log shows `presence: home` and a low-priority **Welcome home** push arrives.
 - Press **Arm Away**: logs show `arm_away accepted`; policy re-enabled.
 - Wrong PIN + **Disarm**: logs show `disarm rejected: bad PIN`; no state change.
 - `sudo podman kill zwave-controller` — systemd restarts the unit within 5 s.
 - Startup logs a `watching node N: <name>` line per node — confirm the door and
   motion sensors are listed.
 - Open the door: a push arrives within a second or two. Close it: no push, only
-  a DEBUG line. Open it again immediately: suppressed, with a DEBUG line saying
-  how far into the cooldown it was.
+  an `event: Front Door closed [not notifying]` line. Open it again
+  immediately: suppressed, with an `event: … [suppressed, 2s into 15s door
+  cooldown]` line.
 - Walk past the motion sensor: one push, then quiet for the cooldown.
 - Restart `zwave-js-server`: the controller logs the dropped connection and
   exits non-zero rather than sitting on a dead socket, so systemd restarts it.

@@ -10,13 +10,19 @@ let the away timer keep running: an outage that lasts longer than the grace
 period ends with alerts *un*muted, which is the safe direction for a
 security feature. If the gateway is unreachable from the LAN for that long,
 the WiFi is probably down and "phone not on WiFi" is literally true.
+
+``on_return`` fires on a genuine return: an away -> home flip where "away"
+was established by evidence (a successful poll without the phone, or the
+grace period expiring), not merely by startup ignorance. A restart while
+you are home does not greet you; a restart while you are out, followed by
+you walking in, does.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,18 +35,23 @@ class PresenceMonitor:
         *,
         away_grace_seconds: int,
         poll_seconds: int,
+        on_return: Callable[[Iterable[str]], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fetch = fetch
         self._macs = macs
         self._grace = away_grace_seconds
         self._poll_seconds = poll_seconds
+        self._on_return = on_return
         self._clock = clock
         # Unknown counts as away: until the first successful sighting,
         # alerts fire.
         self._home = False
         self._last_seen: float | None = None
         self._failures = 0
+        # True once "away" has been confirmed by evidence rather than
+        # assumed at startup; gates the welcome-home callback.
+        self._confirmed_away = False
 
     def is_home(self) -> bool:
         return self._home
@@ -71,8 +82,15 @@ class PresenceMonitor:
             if not self._home:
                 self._home = True
                 _LOGGER.info("presence: home (%s on WiFi)", ", ".join(sorted(seen)))
+                if self._confirmed_away:
+                    self._confirmed_away = False
+                    await self._greet(sorted(seen))
             return
 
+        if not self._home:
+            # A successful poll with nobody here: that is real evidence, so
+            # the next arrival counts as a return.
+            self._confirmed_away = True
         self._check_away(now)
 
     def _check_away(self, now: float) -> None:
@@ -81,7 +99,17 @@ class PresenceMonitor:
         unseen = now - self._last_seen
         if unseen >= self._grace:
             self._home = False
+            self._confirmed_away = True
             _LOGGER.info("presence: away (unseen for %.0fs)", unseen)
+
+    async def _greet(self, seen: list[str]) -> None:
+        if self._on_return is None:
+            return
+        try:
+            await self._on_return(seen)
+        except Exception:  # noqa: BLE001
+            # The poller must survive anything the callback does.
+            _LOGGER.exception("presence: on_return callback failed")
 
     async def run(self) -> None:
         """Poll forever. The caller primes state with ``poll_once`` first."""

@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 import signal
+import sys
 
 import aiohttp
 import httpx
@@ -12,7 +13,7 @@ from zwave_js_server.client import Client
 
 from .config import Config
 from .keypad_feedback import KeypadLed
-from .notify import Notifier
+from .notify import PRIORITY_LOW, Notifier
 from .presence import PresenceMonitor
 from .sensors import SensorHandler
 from .unifi import UnifiClient
@@ -69,6 +70,7 @@ async def _run() -> None:
     cfg = Config.from_env()
     logging.basicConfig(
         level=cfg.log_level,
+        stream=sys.stdout,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     # httpx logs every request at INFO; the presence poller would turn that
@@ -131,11 +133,22 @@ async def _run() -> None:
 
             presence: PresenceMonitor | None = None
             if cfg.presence_enabled:
+
+                async def welcome_home(seen) -> None:
+                    await notifier.send(
+                        title="Welcome home",
+                        message=f"{', '.join(seen)} is back on the WiFi. "
+                        "Door and motion alerts are muted.",
+                        priority=PRIORITY_LOW,
+                        tags="house",
+                    )
+
                 presence = PresenceMonitor(
                     unifi.connected_macs,
                     cfg.presence_macs,
                     away_grace_seconds=cfg.presence_away_grace_seconds,
                     poll_seconds=cfg.presence_poll_seconds,
+                    on_return=welcome_home,
                 )
                 # Prime the state before any sensor can fire, so a door
                 # opened right after startup is judged on real data.

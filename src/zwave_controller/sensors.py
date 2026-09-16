@@ -253,7 +253,7 @@ class SensorHandler:
                     "tags": "door",
                 }
             if event == _DOOR_CLOSED:
-                _LOGGER.debug("%s closed (not notifying)", name)
+                _LOGGER.info("event: %s closed [not notifying]", name)
                 return None
 
         elif type_ == NotificationType.HOME_SECURITY:
@@ -265,11 +265,11 @@ class SensorHandler:
                     "tags": "door",
                 }
             if event == HomeSecurityNotificationEvent.IDLE:
-                _LOGGER.debug("%s back to idle (not notifying)", name)
+                _LOGGER.info("event: %s back to idle [not notifying]", name)
                 return None
             if event in _MOTION_EVENTS:
                 if not self._motion_enabled:
-                    _LOGGER.debug("motion on %s suppressed (NOTIFY_MOTION off)", name)
+                    _LOGGER.info("event: motion on %s [NOTIFY_MOTION off]", name)
                     return None
                 return _CAT_MOTION, {
                     "title": f"Motion: {name}",
@@ -347,20 +347,18 @@ class SensorHandler:
     def _fire(self, node_id: int, category: str, alert: dict[str, str]) -> None:
         """Send an alert unless muted by presence or still cooling down.
 
-        The presence check comes first and does not touch the cooldown: a
-        door opened while home must not start a window that hides a real
-        open seconds after the phone leaves. Door mutes are logged at INFO
-        so the journal still shows when the door opened; motion at DEBUG
-        because it re-fires constantly while someone is around.
+        Every event reaches the log at INFO whether or not it is pushed:
+        the suppressed paths log here with the reason, and ``Notifier``
+        logs the ones that go out. The presence check comes first and does
+        not touch the cooldown: a door opened while home must not start a
+        window that hides a real open seconds after the phone leaves.
         """
         if self._muted is not None and category in _MUTED_WHEN_HOME and self._muted():
-            level = logging.INFO if category == _CAT_DOOR else logging.DEBUG
-            _LOGGER.log(
-                level,
-                "muted %s alert for node %d (someone is home): %s",
-                category,
-                node_id,
+            _LOGGER.info(
+                "event: %s [muted, someone is home] (node %d, %s)",
                 alert["title"],
+                node_id,
+                category,
             )
             return
 
@@ -369,13 +367,13 @@ class SensorHandler:
         now = self._clock()
         last = self._last_alert.get(key)
         if last is not None and now - last < cooldown:
-            _LOGGER.debug(
-                "suppressing %s alert for node %d (%.0fs into %ds cooldown): %s",
-                category,
-                node_id,
+            _LOGGER.info(
+                "event: %s [suppressed, %.0fs into %ds %s cooldown] (node %d)",
+                alert["title"],
                 now - last,
                 cooldown,
-                alert["title"],
+                category,
+                node_id,
             )
             return
         self._last_alert[key] = now
