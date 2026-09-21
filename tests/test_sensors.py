@@ -11,6 +11,7 @@ from .conftest import FakeClock, FakeNotifier, notification
 
 ACCESS_CONTROL = 6
 HOME_SECURITY = 7
+WATER_ALARM = 5
 ENTRY_CONTROL_CC = 111
 
 DOOR_OPEN = 22
@@ -19,6 +20,8 @@ MOTION = 8
 INTRUSION = 2
 COVER_REMOVED = 3
 IDLE = 0
+LEAK = 2
+LEAK_CLEARED = 4
 
 BATTERY_CC = 128
 
@@ -459,6 +462,97 @@ def test_node_label_prefers_name_then_description_then_id():
     assert node_label(FakeNode(3)) == "node 3"
 
 
+# -- water leak ---------------------------------------------------------------
+
+
+def wet(leak):
+    leak.emit("notification", {"notification": notification(leak, type_=WATER_ALARM, event=LEAK)})
+
+
+async def test_leak_detected_notifies(driver, leak):
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    wet(leak)
+    await drain()
+
+    assert notifier.titles == ["Leak: Leak Detector"]
+    assert notifier.sent[0]["priority"] == "urgent"
+    assert notifier.sent[0]["tags"] == "droplet"
+
+
+async def test_leak_not_muted_while_home(driver, leak):
+    """The whole point of a leak detector is to hear it while you're home."""
+    notifier = FakeNotifier()
+    await build(driver, notifier, muted=lambda: True)
+
+    wet(leak)
+    await drain()
+
+    assert notifier.titles == ["Leak: Leak Detector"]
+
+
+async def test_leak_cleared_is_silent_but_logged(driver, leak, caplog):
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    with caplog.at_level("INFO", logger="zwave_controller.sensors"):
+        leak.emit("notification", {"notification": notification(leak, type_=WATER_ALARM, event=LEAK_CLEARED)})
+        leak.emit("notification", {"notification": notification(leak, type_=WATER_ALARM, event=IDLE)})
+        await drain()
+
+    assert notifier.sent == []
+    assert sum(
+        "Leak Detector leak cleared [not notifying]" in r.getMessage() and r.levelname == "INFO"
+        for r in caplog.records
+    ) == 2
+
+
+async def test_leak_via_notification_value(driver, leak):
+    """Leak reported as a Notification CC value rather than an event."""
+    from .conftest import FakeValue
+
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    def report(value: int):
+        leak.emit(
+            "value updated",
+            {
+                "value": FakeValue(
+                    113,
+                    "Water Alarm",
+                    value,
+                    notification_type=WATER_ALARM,
+                    property_key_name="Sensor status",
+                )
+            },
+        )
+
+    report(LEAK)
+    report(IDLE)
+    await drain()
+
+    assert notifier.titles == ["Leak: Leak Detector"]
+
+
+async def test_leak_uses_the_short_cooldown(driver, leak):
+    """A sensor still sitting in water should keep nagging, not go quiet for 5 minutes."""
+    notifier = FakeNotifier()
+    _, clock = await build(driver, notifier, cooldown_seconds=300, door_cooldown_seconds=15)
+
+    wet(leak)
+    clock.advance(5)
+    wet(leak)
+    await drain()
+    assert len(notifier.sent) == 1
+
+    clock.advance(11)
+    wet(leak)
+    await drain()
+    assert len(notifier.sent) == 2
+
+
 # -- presence muting ----------------------------------------------------------
 
 
@@ -481,7 +575,7 @@ async def test_door_and_motion_muted_while_home(driver, door, motion):
     assert notifier.sent == []
 
 
-async def test_health_alerts_not_muted_while_home(driver, door, motion):
+async def test_health_alerts_not_muted_while_home(driver, door, motion, leak):
     from .conftest import FakeValue
 
     notifier = FakeNotifier()
@@ -491,6 +585,7 @@ async def test_health_alerts_not_muted_while_home(driver, door, motion):
     door.emit("value updated", {"value": FakeValue(BATTERY_CC, "isLow", True)})
     door.emit("dead", {})
     door.emit("alive", {})
+    leak.emit("notification", {"notification": notification(leak, type_=WATER_ALARM, event=LEAK)})
     await drain()
 
     assert notifier.titles == [
@@ -498,6 +593,7 @@ async def test_health_alerts_not_muted_while_home(driver, door, motion):
         "Low battery: Front Door",
         "Front Door offline",
         "Front Door back online",
+        "Leak: Leak Detector",
     ]
 
 

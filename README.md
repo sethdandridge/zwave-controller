@@ -9,9 +9,9 @@ zone-based firewall policy. A correct PIN + **Disarm** pauses the policy; the
 **Arm Away** / **Arm Home** buttons resume it.
 
 Also sends [ntfy](https://ntfy.sh) push notifications for door-open, motion,
-and sensor health events from every other node on the controller — see
-[Notifications](#notifications). Door and motion pushes can be muted while a
-phone is on the WiFi — see [Presence](#presence).
+water-leak and sensor health events from every other node on the controller —
+see [Notifications](#notifications). Door and motion pushes can be muted while
+a phone is on the WiFi — see [Presence](#presence).
 
 ## Local development
 
@@ -59,6 +59,8 @@ after a restart.
 | Door/window **closed** (back to idle) | no (logged) | — |
 | Motion detected | yes, unless `NOTIFY_MOTION=false` or someone is home | default |
 | Tamper — cover removed, product moved | yes, even when home | urgent |
+| Water leak detected | yes, even when home | urgent |
+| Water leak cleared (sensor dry again) | no (logged) | — |
 | Battery low (`isLow`, or level ≤ `NOTIFY_BATTERY_THRESHOLD`) | yes, even when home | default |
 | Node stopped responding / recovered | yes, even when home | high / low |
 | Welcome home — phone back on WiFi after being away ([Presence](#presence)) | yes | low |
@@ -67,7 +69,8 @@ after a restart.
 push that goes out logs `notified: <title>`; one that doesn't logs
 `event: <title> [reason]`, where the reason is `muted, someone is home`,
 `suppressed, 40s into 300s motion cooldown`, `NOTIFY_MOTION off`, or
-`not notifying` for door-closed/idle. The journal is therefore a complete
+`not notifying` for door-closed/idle and leak-cleared. The journal is
+therefore a complete
 record of what the sensors saw, and the phone only hears the interesting
 subset.
 
@@ -85,7 +88,7 @@ window rather than a storm.
 
 | Category | Window | Why |
 |---|---|---|
-| Door, tamper | `NOTIFY_DOOR_COOLDOWN_SECONDS` (15) | Short on purpose. A door only fires on the open transition, so it cannot flood — and a long window would mean someone entering minutes after you did goes unreported. Just long enough to absorb a chattering reed switch. |
+| Door, tamper, leak | `NOTIFY_DOOR_COOLDOWN_SECONDS` (15) | Short on purpose. A door only fires on the open transition, so it cannot flood — and a long window would mean someone entering minutes after you did goes unreported. Just long enough to absorb a chattering reed switch. A leak detector that re-reports while still wet *should* keep nagging. |
 | Motion | `NOTIFY_COOLDOWN_SECONDS` (300) | The sensor that actually floods. |
 | Offline / online | `NOTIFY_COOLDOWN_SECONDS` (300) | Damps a node flapping at the edge of range. |
 | Low battery | 24 h, plus edge detection | Re-reported on every wake-up. |
@@ -131,8 +134,8 @@ Alerting must never be able to block the firewall toggle.
 Optional, and off unless `PRESENCE_MACS` is set (it also needs `NTFY_URL`).
 The UniFi client list is polled every `PRESENCE_POLL_SECONDS` (30); while any
 listed MAC is associated with the WiFi, **door and motion** pushes are muted.
-Tamper, battery and offline/online alerts fire regardless — being home is no
-reason not to hear about a dead sensor.
+Leak, tamper, battery and offline/online alerts fire regardless — being home
+is no reason not to hear about a burst pipe or a dead sensor.
 
 | | |
 |---|---|

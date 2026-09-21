@@ -1,4 +1,4 @@
-"""Door / motion / health alerting for every node on the controller.
+"""Door / motion / leak / health alerting for every node on the controller.
 
 Subscribes to *all* nodes rather than a configured allowlist: new sensors
 paired in zwave-js start alerting after a restart with no config change, and
@@ -12,8 +12,9 @@ on every wake-up, so the cooldown alone would need to be impractically long,
 and it is capped at one push per node per day either way.
 
 Door and motion are additionally muted while ``muted()`` says someone is
-home (see presence.py). Health alerts -- tamper, battery, offline/online --
-are never muted: being home is no reason not to hear about a dead sensor.
+home (see presence.py). Leak and health alerts -- water, tamper, battery,
+offline/online -- are never muted: being home is no reason not to hear about
+a burst pipe or a dead sensor.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     HomeSecurityNotificationEvent,
     NotificationType,
+    WaterAlarmNotificationEvent,
 )
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
@@ -69,17 +71,34 @@ _TAMPER_EVENTS = frozenset(
         HomeSecurityNotificationEvent.TAMPERING_PRODUCT_MOVED,  # 9
     }
 )
+# Leak detectors report through Water Alarm "Sensor status". The "dropped"
+# events are the sensor drying out again -- the counterpart of door-closed.
+_LEAK_EVENTS = frozenset(
+    {
+        WaterAlarmNotificationEvent.SENSOR_STATUS_WATER_LEAK_DETECTED_LOCATION_PROVIDED,  # 1
+        WaterAlarmNotificationEvent.SENSOR_STATUS_WATER_LEAK_DETECTED,  # 2
+    }
+)
+_LEAK_CLEARED_EVENTS = frozenset(
+    {
+        WaterAlarmNotificationEvent.IDLE,  # 0
+        WaterAlarmNotificationEvent.WATER_LEVEL_DROPPED_LOCATION_PROVIDED,  # 3
+        WaterAlarmNotificationEvent.WATER_LEVEL_DROPPED,  # 4
+    }
+)
 
 # Categories are the cooldown keys, so a door open never suppresses a
 # tamper alert on the same node.
 _CAT_DOOR = "door"
 _CAT_MOTION = "motion"
 _CAT_TAMPER = "tamper"
+_CAT_LEAK = "leak"
 _CAT_BATTERY = "battery"
 _CAT_OFFLINE = "offline"
 _CAT_ONLINE = "online"
 
-# The only categories presence is allowed to silence.
+# The only categories presence is allowed to silence. A leak is deliberately
+# absent: it is exactly the alert you want while sitting on the couch.
 _MUTED_WHEN_HOME = frozenset({_CAT_DOOR, _CAT_MOTION})
 
 # A low battery is an edge, but a device whose ``level`` hovers around the
@@ -285,6 +304,18 @@ class SensorHandler:
                     "tags": "rotating_light",
                 }
 
+        elif type_ == NotificationType.WATER_ALARM:
+            if event in _LEAK_EVENTS:
+                return _CAT_LEAK, {
+                    "title": f"Leak: {name}",
+                    "message": "Water detected.",
+                    "priority": PRIORITY_URGENT,
+                    "tags": "droplet",
+                }
+            if event in _LEAK_CLEARED_EVENTS:
+                _LOGGER.info("event: %s leak cleared [not notifying]", name)
+                return None
+
         _LOGGER.debug(
             "ignoring notification from %s: type=%s event=%s (%s)",
             name,
@@ -336,9 +367,11 @@ class SensorHandler:
         transition -- and it is the one event where a miss matters most:
         with the motion window applied, a second entry minutes after a
         legitimate one would go unreported. Motion keeps the long window
-        because that is the sensor that actually floods.
+        because that is the sensor that actually floods. A leak gets the
+        short window too: it is rare, and if the sensor re-reports while
+        still wet, being nagged is the point.
         """
-        if category in (_CAT_DOOR, _CAT_TAMPER):
+        if category in (_CAT_DOOR, _CAT_TAMPER, _CAT_LEAK):
             return self._door_cooldown
         if category == _CAT_BATTERY:
             return _BATTERY_REALERT_SECONDS

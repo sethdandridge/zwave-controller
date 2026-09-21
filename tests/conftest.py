@@ -132,5 +132,10 @@ def motion() -> FakeNode:
 
 
 @pytest.fixture
-def driver(door: FakeNode, motion: FakeNode) -> FakeDriver:
-    return FakeDriver(FakeController({5: door, 6: motion}))
+def leak() -> FakeNode:
+    return FakeNode(node_id=23, name="Leak Detector")
+
+
+@pytest.fixture
+def driver(door: FakeNode, motion: FakeNode, leak: FakeNode) -> FakeDriver:
+    return FakeDriver(FakeController({5: door, 6: motion, 23: leak}))
