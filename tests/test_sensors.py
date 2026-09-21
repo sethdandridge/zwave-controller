@@ -477,6 +477,7 @@ async def test_leak_detected_notifies(driver, leak):
     await drain()
 
     assert notifier.titles == ["Leak: Leak Detector"]
+    assert notifier.sent[0]["message"] == "Basement: Water detected."
     assert notifier.sent[0]["priority"] == "urgent"
     assert notifier.sent[0]["tags"] == "droplet"
 
@@ -551,6 +552,46 @@ async def test_leak_uses_the_short_cooldown(driver, leak):
     wet(leak)
     await drain()
     assert len(notifier.sent) == 2
+
+
+# -- location -----------------------------------------------------------------
+
+
+async def test_every_alert_carries_the_node_location(driver, door, motion, caplog):
+    """Name says which sensor; location says where it is. Both go out."""
+    from .conftest import FakeValue
+
+    door.location = "Front Porch"
+    motion.location = "Hallway"
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    open_door(door)
+    trip_motion(motion)
+    motion.emit("notification", {"notification": notification(motion, type_=HOME_SECURITY, event=COVER_REMOVED)})
+    door.emit("value updated", {"value": FakeValue(BATTERY_CC, "level", 10)})
+    door.emit("dead", {})
+    door.emit("alive", {})
+    await drain()
+
+    assert [s["message"] for s in notifier.sent] == [
+        "Front Porch: Door/window opened.",
+        "Hallway: Motion detected.",
+        "Hallway: event label",
+        "Front Porch: Replace the battery (10%).",
+        "Front Porch: Sensor stopped responding to the Z-Wave controller.",
+        "Front Porch: Sensor is responding again.",
+    ]
+
+
+async def test_missing_location_leaves_message_bare(driver, door):
+    notifier = FakeNotifier()
+    await build(driver, notifier)
+
+    open_door(door)
+    await drain()
+
+    assert notifier.sent[0]["message"] == "Door/window opened."
 
 
 # -- presence muting ----------------------------------------------------------

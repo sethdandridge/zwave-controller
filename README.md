@@ -65,6 +65,11 @@ after a restart.
 | Node stopped responding / recovered | yes, even when home | high / low |
 | Welcome home — phone back on WiFi after being away ([Presence](#presence)) | yes | low |
 
+Every push names the device in the title and, when the node has a *location*
+set in zwave-js (next to its name), prefixes the body with it:
+`Leak: Washer` / `Basement: Water detected.` Nodes without a location get the
+bare message.
+
 **Every event is logged to stdout at INFO whether or not it is pushed.** A
 push that goes out logs `notified: <title>`; one that doesn't logs
 `event: <title> [reason]`, where the reason is `muted, someone is home`,

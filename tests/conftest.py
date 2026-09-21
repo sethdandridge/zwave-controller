@@ -23,6 +23,7 @@ class FakeNode:
     node_id: int
     name: str | None = None
     description: str | None = None
+    location: str | None = None
     status: str = "alive"
     handlers: dict[str, list] = field(default_factory=dict)
 
@@ -133,7 +134,7 @@ def motion() -> FakeNode:
 
 @pytest.fixture
 def leak() -> FakeNode:
-    return FakeNode(node_id=23, name="Leak Detector")
+    return FakeNode(node_id=23, name="Leak Detector", location="Basement")
 
 
 @pytest.fixture

@@ -112,6 +112,17 @@ def node_label(node: Node) -> str:
     return node.name or node.device_config.description or f"node {node.node_id}"
 
 
+def located(node: Node, message: str) -> str:
+    """Prefix ``message`` with the node's location, if one is set in zwave-js.
+
+    Every alert goes through this so the phone says *where*, not just which
+    device: "Basement: Water detected." A node with no location gets the
+    bare message.
+    """
+    location = node.location
+    return f"{location}: {message}" if location else message
+
+
 class SensorHandler:
     def __init__(
         self,
@@ -224,7 +235,7 @@ class SensorHandler:
             _CAT_OFFLINE,
             {
                 "title": f"{node_label(node)} offline",
-                "message": "Sensor stopped responding to the Z-Wave controller.",
+                "message": located(node, "Sensor stopped responding to the Z-Wave controller."),
                 "priority": PRIORITY_HIGH,
                 "tags": "warning",
             },
@@ -239,7 +250,7 @@ class SensorHandler:
             _CAT_ONLINE,
             {
                 "title": f"{node_label(node)} back online",
-                "message": "Sensor is responding again.",
+                "message": located(node, "Sensor is responding again."),
                 "priority": PRIORITY_LOW,
                 "tags": "white_check_mark",
             },
@@ -267,7 +278,7 @@ class SensorHandler:
             if event == _DOOR_OPEN:
                 return _CAT_DOOR, {
                     "title": f"{name} opened",
-                    "message": "Door/window opened.",
+                    "message": located(node, "Door/window opened."),
                     "priority": PRIORITY_HIGH,
                     "tags": "door",
                 }
@@ -279,7 +290,7 @@ class SensorHandler:
             if event in _INTRUSION_EVENTS:
                 return _CAT_DOOR, {
                     "title": f"{name} opened",
-                    "message": "Door/window opened.",
+                    "message": located(node, "Door/window opened."),
                     "priority": PRIORITY_HIGH,
                     "tags": "door",
                 }
@@ -292,14 +303,14 @@ class SensorHandler:
                     return None
                 return _CAT_MOTION, {
                     "title": f"Motion: {name}",
-                    "message": "Motion detected.",
+                    "message": located(node, "Motion detected."),
                     "priority": PRIORITY_DEFAULT,
                     "tags": "runner",
                 }
             if event in _TAMPER_EVENTS:
                 return _CAT_TAMPER, {
                     "title": f"Tamper: {name}",
-                    "message": detail or "Tamper or intrusion reported.",
+                    "message": located(node, detail or "Tamper or intrusion reported."),
                     "priority": PRIORITY_URGENT,
                     "tags": "rotating_light",
                 }
@@ -308,7 +319,7 @@ class SensorHandler:
             if event in _LEAK_EVENTS:
                 return _CAT_LEAK, {
                     "title": f"Leak: {name}",
-                    "message": "Water detected.",
+                    "message": located(node, "Water detected."),
                     "priority": PRIORITY_URGENT,
                     "tags": "droplet",
                 }
@@ -353,7 +364,7 @@ class SensorHandler:
         detail = f" ({value}%)" if property_ == "level" else ""
         return {
             "title": f"Low battery: {name}",
-            "message": f"Replace the battery{detail}.",
+            "message": located(node, f"Replace the battery{detail}."),
             "priority": PRIORITY_DEFAULT,
             "tags": "battery",
         }
